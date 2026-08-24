@@ -24,7 +24,9 @@ import 'package:dart_webrtc/src/media_stream_track_impl.dart'; // import_sorter:
 const audioContainerId = 'livekit_audio_container';
 const audioPrefix = 'livekit_audio_';
 
-web.AudioContext _audioContext = web.AudioContext();
+// NOTE: an AudioContext used to be created here but was removed — it was
+// never connected to any graph and only served as an unreliable gate for
+// startAllAudioElement (see comment there). Audio elements play standalone.
 Map<String, web.Element> _audioElements = {};
 
 Future<dynamic> startAudio(String id, rtc.MediaStreamTrack track) async {
@@ -58,7 +60,15 @@ Future<bool> startAllAudioElement() async {
       await audio.play().toDart;
     }
   }
-  return _audioContext.state == 'running';
+  // The AudioContext created at module load was never connected to any
+  // graph, so gating on `AudioContext.state == 'running'` did NOT reflect
+  // actual element playback (on mobile it commonly stays 'suspended' until
+  // an explicit resume within a user gesture, which we never issue). If
+  // every `play()` in the loop above resolved without throwing, playback is
+  // actually running — that is the real success signal. A rejected play()
+  // propagates out of this function and is handled by Room.startAudio()'s
+  // catch, preserving the failure path.
+  return true;
 }
 
 void stopAudio(String id) {
