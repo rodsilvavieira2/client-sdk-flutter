@@ -29,3 +29,10 @@ Future<bool> startAllAudioElement() async {
 void setSinkId(String id, String deviceId) {
   // do nothing
 }
+
+/// Ganho > 1.0 não é suportado fora do web: sem AudioContext/GainNode.
+bool get supportsOutputGain => false;
+
+void setVolume(String id, double volume) {
+  // do nothing
+}

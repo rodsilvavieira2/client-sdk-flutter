@@ -20,14 +20,21 @@ import '../../internal/events.dart';
 import '../../logger.dart';
 import '../../stats/audio_source_stats.dart';
 import '../../stats/stats.dart';
+import '../../support/platform.dart';
 import '../../types/other.dart';
 import '../audio_management.dart';
 import '../local/local.dart';
 import '../web/_audio_api.dart' if (dart.library.js_interop) '../web/_audio_html.dart' as audio;
 import 'remote.dart';
 
+/// Normaliza ganho público de reprodução: NaN vira 1.0, piso 0.0, teto 4.0
+/// (contrato do app: `outputGain × participantGain`, cada um até 2.0).
+double clampRemoteAudioGain(double volume) =>
+    volume.isNaN ? 1.0 : volume.clamp(0.0, 4.0).toDouble();
+
 class RemoteAudioTrack extends RemoteTrack with AudioTrack, RemoteAudioManagementMixin {
   String? _deviceId;
+  double _volume = 1.0;
   RemoteAudioTrack(
     TrackSource source,
     rtc.MediaStream stream,
@@ -51,6 +58,8 @@ class RemoteAudioTrack extends RemoteTrack with AudioTrack, RemoteAudioManagemen
         if (_deviceId != null) {
           audio.setSinkId(getCid(), _deviceId!);
         }
+        // Aplica o ganho armazenado (ou pendente de setVolume pré-start).
+        await setVolume(_volume);
       } catch (e) {
         if (e.toString().startsWith('NotAllowedError')) {
           events.emit(AudioPlaybackFailed(track: this));
@@ -73,6 +82,30 @@ class RemoteAudioTrack extends RemoteTrack with AudioTrack, RemoteAudioManagemen
   void setSinkId(String deviceId) {
     audio.setSinkId(getCid(), deviceId);
     _deviceId = deviceId;
+  }
+
+  /// Ganho atual de reprodução (0.0..4.0).
+  double get volume => _volume;
+
+  /// Define o ganho de reprodução desta faixa remota.
+  ///
+  /// - Web: aplicado ao GainNode dedicado da faixa (suporta boost > 1.0).
+  /// - Nativo: via `Helper.setVolume` (boost > 1.0 é best-effort).
+  ///
+  /// Seguro chamar antes de [start]: o valor fica armazenado e é aplicado
+  /// quando o áudio inicia. Falhas de aplicação são registradas e a faixa
+  /// tenta de novo no próximo `start()`/`setVolume`.
+  Future<void> setVolume(double volume) async {
+    _volume = clampRemoteAudioGain(volume);
+    try {
+      if (lkPlatformIs(PlatformType.web)) {
+        audio.setVolume(getCid(), _volume);
+      } else if (isActive) {
+        await rtc.Helper.setVolume(_volume, mediaStreamTrack);
+      }
+    } catch (e) {
+      logger.warning('failed to set remote audio volume: $e');
+    }
   }
 
   AudioReceiverStats? prevStats;

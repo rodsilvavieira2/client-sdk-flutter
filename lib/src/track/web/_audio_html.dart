@@ -29,6 +29,55 @@ const audioPrefix = 'livekit_audio_';
 // startAllAudioElement (see comment there). Audio elements play standalone.
 Map<String, web.Element> _audioElements = {};
 
+// Ganho por faixa no web: um AudioContext compartilhado (limite de ~6 por
+// página no Chrome impede um por faixa) + MediaElementSource/GainNode por
+// elemento. O GainNode aceita > 1.0, o que o <audio> sozinho não permite.
+web.AudioContext? _sharedContext;
+final Map<String, web.GainNode> _gainNodes = {};
+final Map<String, double> _pendingVolumes = {};
+
+/// O web suporta boost acima de 100% via GainNode.
+bool get supportsOutputGain => true;
+
+/// Armazena o ganho da faixa e aplica de imediato se o grafo já existir.
+/// Seguro chamar antes de [startAudio] (vira pendência aplicada na criação).
+void setVolume(String id, double volume) {
+  _pendingVolumes[id] = volume;
+  _gainNodes[id]?.gain.value = volume;
+}
+
+web.AudioContext _ensureContext() => _sharedContext ??= web.AudioContext();
+
+Future<void> _attachGain(String id, web.HTMLAudioElement element) async {
+  if (_gainNodes.containsKey(id)) return;
+  final ctx = _ensureContext();
+  final source = ctx.createMediaElementSource(element);
+  final gain = ctx.createGain();
+  gain.gain.value = _pendingVolumes[id] ?? 1.0;
+  source.connect(gain);
+  gain.connect(ctx.destination);
+  _gainNodes[id] = gain;
+  // Sem resume dentro de gesto do usuário o contexto fica 'suspended' e o
+  // grafo fica mudo mesmo com o elemento em playing: best-effort, sem virar
+  // gate de sucesso (mesma filosofia do startAllAudioElement).
+  try {
+    if (ctx.state == 'suspended') await ctx.resume().toDart;
+  } catch (_) {}
+}
+
+/// Roteia a SAÍDA DO GRAFO (não mais a do elemento, capturada pela
+/// MediaElementSource) para [deviceId] quando o navegador expõe
+/// `AudioContext.setSinkId` (Chrome 110+). Sem suporte, mantém a saída padrão.
+void _routeGraphOutput(String deviceId) {
+  final ctx = _sharedContext;
+  if (ctx == null) return;
+  try {
+    if (ctx.hasProperty('setSinkId'.toJS).toDart) {
+      ctx.callMethod('setSinkId'.toJS, deviceId.toJS);
+    }
+  } catch (_) {}
+}
+
 Future<dynamic> startAudio(String id, rtc.MediaStreamTrack track) async {
   if (track is! MediaStreamTrackWeb) {
     return;
@@ -50,6 +99,10 @@ Future<dynamic> startAudio(String id, rtc.MediaStreamTrack track) async {
   final audioStream = web.MediaStream();
   audioStream.addTrack(track.jsTrack);
   audioElement.srcObject = audioStream;
+  // O grafo precisa existir antes do play para o ganho valer desde o início;
+  // a saída do elemento passa a fluir pelo GainNode (setSinkId do elemento
+  // deixa de ter efeito — ver setSinkId abaixo).
+  await _attachGain(id, audio);
   return audio.play().toDart;
 }
 
@@ -72,6 +125,11 @@ Future<bool> startAllAudioElement() async {
 }
 
 void stopAudio(String id) {
+  final gain = _gainNodes.remove(id);
+  try {
+    gain?.disconnect();
+  } catch (_) {}
+  _pendingVolumes.remove(id);
   final el = web.document.getElementById(audioPrefix + id);
   if (el != null) {
     if (el.instanceOfString('HTMLAudioElement')) {
@@ -104,7 +162,10 @@ void setSinkId(String id, String deviceId) {
   final el = web.document.getElementById(audioPrefix + id);
   if (el != null && el.instanceOfString('HTMLAudioElement')) {
     final audio = el as web.HTMLAudioElement;
-    if (audio.hasProperty('setSinkId'.toJS).toDart) {
+    if (_gainNodes.containsKey(id)) {
+      // Elemento capturado pela MediaElementSource: rotear o grafo.
+      _routeGraphOutput(deviceId);
+    } else if (audio.hasProperty('setSinkId'.toJS).toDart) {
       audio.setSinkId(deviceId);
     }
   }
