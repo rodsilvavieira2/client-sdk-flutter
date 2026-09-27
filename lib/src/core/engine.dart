@@ -1477,6 +1477,7 @@ class Engine extends Disposable with EventsEmittable<EngineEvent> {
 
       try {
         final answer = await subscriber!.pc.createAnswer();
+        subscriber!.preferStereoOpus(answer);
         logger.fine('Created answer');
         logger.finer('sdp: ${answer.sdp}');
         await subscriber!.pc.setLocalDescription(answer);

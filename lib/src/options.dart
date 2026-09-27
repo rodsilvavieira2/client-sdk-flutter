@@ -512,6 +512,9 @@ class AudioPublishOptions extends PublishOptions {
   /// Defaults to true.
   final bool dtx;
 
+  /// Negotiate two-channel Opus for this track. Leave off for microphones.
+  final bool stereo;
+
   /// red (Redundant Audio Data)
   final bool? red;
 
@@ -524,6 +527,7 @@ class AudioPublishOptions extends PublishOptions {
     super.stream,
     this.encoding,
     this.dtx = true,
+    this.stereo = false,
     this.red = true,
     this.preConnect = false,
   });
@@ -531,6 +535,7 @@ class AudioPublishOptions extends PublishOptions {
   AudioPublishOptions copyWith({
     AudioEncoding? encoding,
     bool? dtx,
+    bool? stereo,
     String? name,
     String? stream,
     bool? red,
@@ -538,6 +543,7 @@ class AudioPublishOptions extends PublishOptions {
   }) => AudioPublishOptions(
     encoding: encoding ?? this.encoding,
     dtx: dtx ?? this.dtx,
+    stereo: stereo ?? this.stereo,
     name: name ?? this.name,
     stream: stream ?? this.stream,
     red: red ?? this.red,

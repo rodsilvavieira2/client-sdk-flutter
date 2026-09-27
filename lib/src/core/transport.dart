@@ -63,6 +63,7 @@ class Transport extends Disposable {
   final rtc.RTCPeerConnection pc;
   final List<rtc.RTCIceCandidate> _pendingCandidates = [];
   final List<TrackBitrateInfo> _bitrateTrackers = [];
+  final Set<String> _stereoAudioTrackIds = {};
   bool restartingIce = false;
   bool renegotiate = false;
   TransportOnOffer? onOffer;
@@ -186,6 +187,9 @@ class Transport extends Disposable {
 
     final sdpParsed = sdp_transform.parse(offer.sdp ?? '');
     sdpParsed['media']?.forEach((media) {
+      if (media['type'] == 'audio' && _stereoAudioTrackIds.any((id) => _mediaHasTrackId(media, id))) {
+        _enableStereoOpus(media);
+      }
       if (media['type'] == 'video') {
         ensureVideoDDExtensionForSVC(media, media['type'], media['port'], media['protocol'], media['payloads']);
 
@@ -265,6 +269,55 @@ class Transport extends Disposable {
 
   void setTrackBitrateInfo(TrackBitrateInfo info) {
     _bitrateTrackers.add(info);
+  }
+
+  void enableStereoForTrack(String trackId) {
+    _stereoAudioTrackIds.add(trackId);
+  }
+
+  /// Request stereo Opus when answering server offers for remote audio.
+  void preferStereoOpus(rtc.RTCSessionDescription answer) {
+    final parsed = sdp_transform.parse(answer.sdp ?? '');
+    final media = parsed['media'];
+    if (media is! List) return;
+    for (final section in media.whereType<Map<String, dynamic>>()) {
+      if (section['type'] == 'audio') _enableStereoOpus(section);
+    }
+    answer.sdp = sdp_transform.write(parsed, null);
+  }
+
+  bool _mediaHasTrackId(Map<String, dynamic> media, String trackId) {
+    if ((media['msid'] as String?)?.contains(trackId) ?? false) return true;
+    final ssrcs = media['ssrcs'];
+    if (ssrcs is List) {
+      return ssrcs.any(
+        (entry) =>
+            entry is Map && entry['attribute'] == 'msid' && (entry['value'] as String?)?.contains(trackId) == true,
+      );
+    }
+    return false;
+  }
+
+  void _enableStereoOpus(Map<String, dynamic> media) {
+    final rtp = media['rtp'];
+    if (rtp is! List) return;
+    final opus = rtp.whereType<Map>().where((entry) => (entry['codec'] as String?)?.toLowerCase() == 'opus');
+    if (opus.isEmpty) return;
+    final payload = opus.first['payload'];
+    final fmtps = media['fmtp'];
+    if (fmtps is! List) return;
+    for (final entry in fmtps.whereType<Map>()) {
+      if (entry['payload'] != payload) continue;
+      final fields = (entry['config'] as String? ?? '')
+          .split(';')
+          .where(
+            (field) =>
+                field.isNotEmpty && !field.trim().startsWith('stereo=') && !field.trim().startsWith('sprop-stereo='),
+          );
+      entry['config'] = [...fields, 'stereo=1', 'sprop-stereo=1'].join(';');
+      return;
+    }
+    fmtps.add({'payload': payload, 'config': 'stereo=1;sprop-stereo=1'});
   }
 
   bool ensureVideoDDExtensionForSVC(

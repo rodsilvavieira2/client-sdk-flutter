@@ -186,6 +186,7 @@ class LocalParticipant extends Participant<LocalTrackPublication> {
         muted: track.muted,
         stream: buildStreamId(publishOptions, track.source),
         disableDtx: !publishOptions.dtx,
+        stereo: publishOptions.stereo,
         disableRed: room.e2eeManager != null ? true : publishOptions.red ?? true,
         encryption: room.roomOptions.lkEncryptionType,
       );
@@ -197,6 +198,9 @@ class LocalParticipant extends Participant<LocalTrackPublication> {
       ]);
 
       Future<lk_models.TrackInfo> negotiate(AudioPublishOptions options) async {
+        if (options.stereo) {
+          room.engine.publisher?.enableStereoForTrack(track.mediaStreamTrack.id!);
+        }
         track.transceiver = await room.engine.createTransceiverRTCRtpSender(track, options, encodings);
         await room.engine.negotiate();
         return lk_models.TrackInfo();
@@ -208,6 +212,10 @@ class LocalParticipant extends Participant<LocalTrackPublication> {
         trackInfo = rets[0];
       } else {
         trackInfo = await room.engine.addTrack(req);
+
+        if (publishOptions.stereo) {
+          room.engine.publisher?.enableStereoForTrack(track.mediaStreamTrack.id!);
+        }
 
         final transceiverInit = rtc.RTCRtpTransceiverInit(
           direction: rtc.TransceiverDirection.SendOnly,
